@@ -1,0 +1,177 @@
+#!/bin/bash
+#
+# Syncronize changes from $1 to $2 where $1 is a local directory and $2 is local
+# or remote target directory (with rsync syntax)
+#
+# Copyright 2020 Mikko Rantalainen <mikko.rantalainen@peda.net>
+# License: https://opensource.org/licenses/BSD-2-Clause
+#
+# The script will start with full rsync without `--delete` flag. After that
+# all changes, including removals of files will be synchronized.
+#
+# Note that this may not syncronize all files, just the changes detected by
+# inotifywait. With high enough kernel limits, this should include all changes.
+#
+# To fix kernel limits, run following as root:
+#
+# # increase inotify limits
+# echo 1000000 > /proc/sys/fs/inotify/max_queued_events
+# echo 1000000 > /proc/sys/fs/inotify/max_user_instances
+# echo 1000000 > /proc/sys/fs/inotify/max_user_watches
+#
+# Max RAM usage for the kernel is 1 KB x max_user_watches
+
+SOURCE="$1"
+TARGET="$2"
+
+test -d "$SOURCE" || { echo "Usage: $0 source target - source must be a directory" 1>&2; exit 1; }
+test -z "$TARGET" && { echo "Usage: $0 source target - target must be non-empty string" 1>&2; exit 1; }
+
+# list of files to be synced, each file may be listed multiple times, always appended
+WAITLIST="$(tempfile --prefix="wait." --suffix=".list")"
+# stamp file to declare that WAITLIST has new files, we're fully syncronized if this file is missing
+WAITSTAMP="$(tempfile --prefix="wait." --suffix=".stamp")"
+# list of files to be synced (static for single sync)
+
+SYNCLIST="$(tempfile --prefix="sync." --suffix=".list")"
+# stamp file to declare that rsync is currently syncronizing, we're fully syncronized if this file is missing
+SYNCSTAMP="$(tempfile --prefix="sync." --suffix=".stamp")"
+
+PIDWORKAROUND="$(tempfile --prefix="rsync." --suffix=".pid")"
+
+# remove stamp files to signal that initial state is syncronized
+rm "$SYNCSTAMP" "$WAITSTAMP" "$PIDWORKAROUND"
+trap "rm -f -- '$WAITLIST' '$WAITSTAMP' '$SYNCLIST' '$SYNCSTAMP' '$PIDWORKAROUND'" EXIT
+
+SYNCACTIVE=""
+WAITING=""
+
+fix_source_timestamps()
+{
+	echo "Touching files older than 30 years (fix invalid timestamps by npm install) ..."
+	# touch files older than 30 years (10950 = 30*365 days)
+	find "$SOURCE" -mtime +10950 -exec touch {} +
+}
+
+sync_initial_now()
+{
+	echo "Syncronizing $SOURCE to $TARGET ..."
+	# Note the extra slash at the end of source to avoid making subdirectory inside target
+	rsync -say --info=all0,misc2,name1,remove1,stats2 "$SOURCE/" "$TARGET"
+	echo "Initial syncronization complete."
+}
+
+sync_workaround_issue_121()
+{
+	echo "Running workaround for https://github.com/inotify-tools/inotify-tools/issues/121"
+	# do one full rsync (without --delete for being cautious) to sync possibly missing changes
+	
+	# kill existing workaround rsync because we need to re-start from the beginning
+	test -f "$PIDWORKAROUND" && kill -INT "$(cat "$PIDWORKAROUND")" > /dev/null 2>&1
+	
+	# Technically the old run may not have been stopped yet because kill
+	# is asyncronous but that's okay here because we'll restart the process.
+	# The point of killing the old process is to reduce resource usage, so
+	# killing the old process is best effort only.
+	
+	rsync -say --info=all0,stats1 "$SOURCE/" "$TARGET" &
+	WORKAROUNDPID="$!"
+	echo "$WORKAROUNDPID" > "$PIDWORKAROUND"
+	echo "$BASHPID: Running background workaround as PID $WORKAROUNDPID ..."
+	wait "$WORKAROUNDPID" && echo "$BASHPID: Workaround sync complete." || echo "$BASHPID: Workaround sync aborted."
+}
+
+# sync files from waitlist to target
+sync_now()
+{
+	#echo "start of sync_now()"
+	# sleep for a bit to allow collecting burst of small changes in one run
+	sleep 0.1s
+	true > "$SYNCSTAMP"
+	while true
+	do
+		rm "$WAITSTAMP"
+		echo "$BASHPID: $(date --iso=sec): Starting sync from $SOURCE to $TARGET..."
+		# atomic move WAITLIST to SYNCLIST
+		mv "$WAITLIST" "$SYNCLIST" && touch "$WAITLIST"
+		sort -u -o "$SYNCLIST" "$SYNCLIST"
+		#echo "Files to sync:"
+		#cat "$SYNCLIST"
+		while test -s "$SYNCLIST"
+		do
+			rsync -sayr --info=all0,misc2,name1,remove1,stats1 --delete --delete-missing-args --no-implied-dirs --files-from="$SYNCLIST" "$SOURCE/" "$TARGET"
+			RSYNC_STATUS="$?"
+			
+			case "$RSYNC_STATUS" in
+				0|20|24)
+					# clear list of files to synchronize to make things easier to debug in case of crash
+					true > "$SYNCLIST"
+					;;
+				*)
+					echo "Unknown rsync status: $RSYNC_STATUS. Retrying after 1 second delay..." 1>&2
+					sleep 1
+					;;
+			esac
+		done
+		
+		if test -f "$WAITSTAMP"
+		then
+			echo "$BASHPID: Sync complete but another sync request is waiting, restarting sync"
+		else
+			echo "$BASHPID: Sync complete."
+		 	# sync is no longer active, reset sync stamp
+			rm "$SYNCSTAMP"
+			echo "Waiting for modified files to syncronize (Press CTRL+C to quit) ..."
+			
+			# workaround issue https://github.com/inotify-tools/inotify-tools/issues/121
+			echo ""
+			sync_workaround_issue_121 &
+
+			return;
+		fi
+	done
+}
+
+# sync as soon as possible, however do not run multiple sync_now processes in parallel
+# note that this function is called very often and this must be fast
+sync_soon()
+{
+	if test -f "$SYNCSTAMP"
+	then
+		#echo "Previous sync started at $(cat "$SYNCSTAMP") is still active, queuing sync..."
+		true > "$WAITSTAMP"
+	else
+		true > "$SYNCSTAMP"
+		#echo "$BASHPID: About to start: sync_now &"
+		sync_now &
+		#echo "$BASHPID: Started new sync PID $! ..."
+	fi
+}
+
+# collectfiles
+# collect list of changes to files and append each file to called "$TEMPFILE"
+# note that due inotifywait limitations this cannot correctly handle line feeds
+# in the filenames (such files will be ignored with a warning message) and
+# if a new directory is created and populated really fast, only the directory
+# is reported instead of listing all files, too.
+collectfiles_and_sync()
+{
+	echo "Waiting for modified files to syncronize (Press CTRL+C to quit) ..."
+	(cd "$SOURCE" && inotifywait -qmr -e modify -e move -e create -e delete -e attrib -e close_write --format "// %e %w%f" . ) | \
+	while read SLASHES OPERATION FILENAME
+	do
+		if test "$SLASHES" != "//"
+		then
+			echo "Warning: ignoring inotifywait output: $SLASHES $OPERATION $FILENAME" 1>&2
+			continue;
+		fi
+		#echo "CHANGED: $FILENAME"	
+		echo "$FILENAME" >> "$WAITLIST"
+		sync_soon
+	done
+}
+
+#fix_source_timestamps
+sync_initial_now || exit 1
+collectfiles_and_sync || exit 2
+

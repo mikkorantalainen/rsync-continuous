@@ -1,0 +1,33 @@
+A simple tool to syncronize two directories with low latency.
+
+The initial version never runs `rsync --delete ...` as-is which causes
+this sync to usually not be complete. However, while the sync is active
+the deletes will be syncronized for all events that inotify-tools is
+able to detect.
+
+In practise, the current version of this tool may end up leaving some
+files not deleted in the target. If you feel brave, you can add `--delete`
+to every `rsync` in the script.
+
+Usage:
+
+    rsync-continuous my/directory/to/sync example.com:path/to/target
+
+Will sync all files from directory `my/directory/to/sync` to remote
+server "example.com" using rsync over ssh to remote directory `path/to/target`.
+
+I created this tool to keep git repo and source files on local machine and
+automatically syncronize all files (including the git repo) to remote machine
+as soon as I modify any file. I previously used to use `sshfs` to mount
+remote directory locally but even with high bandwidth connection it's getting
+too slow for my liking. I'm used to get immediate response from git and
+with sshfs even `git status` takes a lot of time when the git repo I'm working
+with is big enough. In practice, I once do initial full rsync from remote
+working directory to local machine using
+
+    rsync -av --delete example.com:path/to/target/ my/directory/to/sync
+
+and then start the above rsync-continuous and keep hacking with the local
+source. Note that you don't need to add a slash to the end of source directory
+like with rsync.
+
