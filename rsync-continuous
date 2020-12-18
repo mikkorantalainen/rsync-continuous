@@ -46,24 +46,48 @@ trap "rm -f -- '$WAITLIST' '$WAITSTAMP' '$SYNCLIST' '$SYNCSTAMP' '$PIDWORKAROUND
 SYNCACTIVE=""
 WAITING=""
 
+maybe_set_title()
+{
+	case "$TERM" in
+		xterm*)
+			printf "\033]0;%s\007" "$*"
+			;;
+		*)
+			;;
+	esac
+}
+
+
+status()
+{
+	maybe_set_title "$@"
+	printf "%s\n" "$*"
+}
+
+warning()
+{
+	maybe_set_title "$@"
+	printf "\033[31;1m%s\033[0m\n" "$*" 1>&2
+}
+
 fix_source_timestamps()
 {
-	echo "Touching files older than 30 years (fix invalid timestamps by npm install) ..."
+	status "Touching files older than 30 years (fix invalid timestamps by npm install) ..."
 	# touch files older than 30 years (10950 = 30*365 days)
 	find "$SOURCE" -mtime +10950 -exec touch {} +
 }
 
 sync_initial_now()
 {
-	echo "Syncronizing $SOURCE to $TARGET ..."
+	status "Syncronizing $SOURCE to $TARGET ..."
 	# Note the extra slash at the end of source to avoid making subdirectory inside target
 	rsync -say --info=all0,misc2,name1,remove1,stats2 "$SOURCE/" "$TARGET"
-	echo "Initial syncronization complete."
+	status "Initial syncronization complete."
 }
 
 sync_workaround_issue_121()
 {
-	echo "Running workaround for https://github.com/inotify-tools/inotify-tools/issues/121"
+	status "Running workaround for https://github.com/inotify-tools/inotify-tools/issues/121"
 	# do one full rsync (without --delete for being cautious) to sync possibly missing changes
 	
 	# kill existing workaround rsync because we need to re-start from the beginning
@@ -77,8 +101,8 @@ sync_workaround_issue_121()
 	rsync -say --info=all0,stats1 "$SOURCE/" "$TARGET" &
 	WORKAROUNDPID="$!"
 	echo "$WORKAROUNDPID" > "$PIDWORKAROUND"
-	echo "$BASHPID: Running background workaround as PID $WORKAROUNDPID ..."
-	wait "$WORKAROUNDPID" && echo "$BASHPID: Workaround sync complete." || echo "$BASHPID: Workaround sync aborted."
+	status "$BASHPID: Running background workaround as PID $WORKAROUNDPID ..."
+	wait "$WORKAROUNDPID" && status "$BASHPID: Workaround sync complete." || status "$BASHPID: Workaround sync aborted."
 }
 
 # sync files from waitlist to target
@@ -91,7 +115,7 @@ sync_now()
 	while true
 	do
 		rm "$WAITSTAMP"
-		echo "$BASHPID: $(date --iso=sec): Starting sync from $SOURCE to $TARGET..."
+		status "$BASHPID: $(date --iso=sec): Starting sync from $SOURCE to $TARGET..."
 		# atomic move WAITLIST to SYNCLIST
 		mv "$WAITLIST" "$SYNCLIST" && touch "$WAITLIST"
 		sort -u -o "$SYNCLIST" "$SYNCLIST"
@@ -108,7 +132,7 @@ sync_now()
 					true > "$SYNCLIST"
 					;;
 				*)
-					echo "Unknown rsync status: $RSYNC_STATUS. Retrying after 1 second delay..." 1>&2
+					status "Unknown rsync status: $RSYNC_STATUS. Retrying after 1 second delay..." 1>&2
 					sleep 1
 					;;
 			esac
@@ -116,12 +140,12 @@ sync_now()
 		
 		if test -f "$WAITSTAMP"
 		then
-			echo "$BASHPID: Sync complete but another sync request is waiting, restarting sync"
+			status "$BASHPID: Sync complete but another sync request is waiting, restarting sync"
 		else
-			echo "$BASHPID: Sync complete."
+			status "$BASHPID: Sync complete."
 		 	# sync is no longer active, reset sync stamp
 			rm "$SYNCSTAMP"
-			echo "Waiting for modified files to syncronize (Press CTRL+C to quit) ..."
+			status "Waiting for more modified files to syncronize (Press CTRL+C to quit) ..."
 			
 			# workaround issue https://github.com/inotify-tools/inotify-tools/issues/121
 			echo ""
@@ -156,13 +180,13 @@ sync_soon()
 # is reported instead of listing all files, too.
 collectfiles_and_sync()
 {
-	echo "Waiting for modified files to syncronize (Press CTRL+C to quit) ..."
+	status "Waiting for more modified files to syncronize (Press CTRL+C to quit) ..."
 	(cd "$SOURCE" && inotifywait -qmr -e modify -e move -e create -e delete -e attrib -e close_write --format "// %e %w%f" . ) | \
 	while read SLASHES OPERATION FILENAME
 	do
 		if test "$SLASHES" != "//"
 		then
-			echo "Warning: ignoring inotifywait output: $SLASHES $OPERATION $FILENAME" 1>&2
+			warning "Warning: ignoring inotifywait output: $SLASHES $OPERATION $FILENAME" 1>&2
 			continue;
 		fi
 		#echo "CHANGED: $FILENAME"	
