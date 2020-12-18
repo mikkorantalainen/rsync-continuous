@@ -39,9 +39,11 @@ SYNCSTAMP="$(tempfile --prefix="sync." --suffix=".stamp")"
 
 PIDWORKAROUND="$(tempfile --prefix="rsync." --suffix=".pid")"
 
+TEMPFILE="$(tempfile --prefix="rsync." --suffix=".tmp")"
+
 # remove stamp files to signal that initial state is syncronized
 rm "$SYNCSTAMP" "$WAITSTAMP" "$PIDWORKAROUND"
-trap "rm -f -- '$WAITLIST' '$WAITSTAMP' '$SYNCLIST' '$SYNCSTAMP' '$PIDWORKAROUND'" EXIT
+trap "rm -f -- '$WAITLIST' '$WAITSTAMP' '$SYNCLIST' '$SYNCSTAMP' '$PIDWORKAROUND' '$TEMPFILE'" EXIT
 
 SYNCACTIVE=""
 WAITING=""
@@ -83,6 +85,39 @@ sync_initial_now()
 	# Note the extra slash at the end of source to avoid making subdirectory inside target
 	rsync -say --info=all0,misc2,name1,remove1,stats2 "$SOURCE/" "$TARGET"
 	status "Initial syncronization complete."
+}
+
+maybe_delete_remote_extra_files()
+{
+	status "Syncronizing $SOURCE to $TARGET ..."
+	status "Computing files to be AUTOMATICALLY DELETED from the remote ..."
+	# Note the extra slash at the end of source to avoid making subdirectory inside target
+	LC_ALL=C rsync --dry-run -sa --max-size=0 --delete --info=all0,del2 "$SOURCE/" "$TARGET" | tee "$TEMPFILE"
+	if test -s "$TEMPFILE"; then
+		answer=""
+		while test -z "$answer"; do
+			read -p "Do you want to remove the above listed remote files? Yes/No/Quit> " answer
+			case "$answer" in
+				y|Y|yes|Yes|YES)
+					status "Removing extra remote files ..."
+					rsync -sa --max-size=0 --delete --info=all0,del2 "$SOURCE/" "$TARGET"
+					;;
+				n|N|no|No|NO)
+					status "Skipping removal of extra remote files"
+					;;
+				q|Q|quit|Quit|QUIT)
+					status "Quitting immediately."
+					exit 0
+					;;
+				*)
+					warning "Unregognized answer, expected Yes, No or Quit."
+					answer=""
+					;;
+			esac
+		done
+	else
+		echo "No files need to be deleted from the remote, nice!"
+	fi
 }
 
 sync_workaround_issue_121()
@@ -195,7 +230,9 @@ collectfiles_and_sync()
 	done
 }
 
+
+maybe_delete_remote_extra_files || exit 1
 #fix_source_timestamps
-sync_initial_now || exit 1
-collectfiles_and_sync || exit 2
+sync_initial_now || exit 2
+collectfiles_and_sync || exit 3
 
