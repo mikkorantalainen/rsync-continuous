@@ -137,7 +137,7 @@ sync_workaround_issue_121()
 	WORKAROUNDPID="$!"
 	echo "$WORKAROUNDPID" > "$PIDWORKAROUND"
 	status "$BASHPID: Running background workaround as PID $WORKAROUNDPID ..."
-	wait "$WORKAROUNDPID" && status "$BASHPID: Workaround sync complete." || status "$BASHPID: Workaround sync aborted."
+	wait "$WORKAROUNDPID" && status "$BASHPID: Workaround sync complete to $TARGET." || status "$BASHPID: Workaround sync aborted."
 }
 
 # sync files from waitlist to target
@@ -180,7 +180,7 @@ sync_now()
 			status "$BASHPID: Sync complete."
 		 	# sync is no longer active, reset sync stamp
 			rm "$SYNCSTAMP"
-			status "Waiting for more modified files to syncronize (Press CTRL+C to quit) ..."
+			status "Waiting for files to syncronize to $TARGET (Press CTRL+C to quit) ..."
 			
 			# workaround issue https://github.com/inotify-tools/inotify-tools/issues/121
 			echo ""
@@ -215,7 +215,7 @@ sync_soon()
 # is reported instead of listing all files, too.
 collectfiles_and_sync()
 {
-	status "Waiting for more modified files to syncronize (Press CTRL+C to quit) ..."
+	status "Waiting for files to syncronize to $TARGET (Press CTRL+C to quit) ..."
 	(cd "$SOURCE" && inotifywait -qmr -e modify -e move -e create -e delete -e attrib -e close_write --format "// %e %w%f" . ) | \
 	while read SLASHES OPERATION FILENAME
 	do
