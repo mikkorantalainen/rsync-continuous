@@ -28,18 +28,18 @@ test -d "$SOURCE" || { echo "Usage: $0 source target - source must be a director
 test -z "$TARGET" && { echo "Usage: $0 source target - target must be non-empty string" 1>&2; exit 1; }
 
 # list of files to be synced, each file may be listed multiple times, always appended
-WAITLIST="$(tempfile --prefix="wait." --suffix=".list")"
+WAITLIST="$(mktemp --tmpdir wait.XXXXXX.list)"
 # stamp file to declare that WAITLIST has new files, we're fully syncronized if this file is missing
-WAITSTAMP="$(tempfile --prefix="wait." --suffix=".stamp")"
+WAITSTAMP="$(mktemp --tmpdir wait.XXXXXX.stamp)"
 # list of files to be synced (static for single sync)
 
-SYNCLIST="$(tempfile --prefix="sync." --suffix=".list")"
+SYNCLIST="$(mktemp --tmpdir sync.XXXXXX.list)"
 # stamp file to declare that rsync is currently syncronizing, we're fully syncronized if this file is missing
-SYNCSTAMP="$(tempfile --prefix="sync." --suffix=".stamp")"
+SYNCSTAMP="$(mktemp --tmpdir sync.XXXXXX.stamp)"
 
-PIDWORKAROUND="$(tempfile --prefix="rsync." --suffix=".pid")"
+PIDWORKAROUND="$(mktemp --tmpdir rsync.XXXXXX.pid)"
 
-TEMPFILE="$(tempfile --prefix="rsync." --suffix=".tmp")"
+TEMPFILE="$(mktemp --tmpdir rsync.XXXXXX.tmp)"
 
 # remove stamp files to signal that initial state is syncronized
 rm "$SYNCSTAMP" "$WAITSTAMP" "$PIDWORKAROUND"
