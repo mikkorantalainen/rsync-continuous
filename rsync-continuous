@@ -63,7 +63,7 @@ maybe_set_title()
 status()
 {
 	maybe_set_title "$@"
-	printf "%s\n" "$*"
+	printf "%s %s\n" "$(date "+%F %T")" "$*"
 }
 
 warning()
