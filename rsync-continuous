@@ -84,6 +84,7 @@ sync_initial_now()
 	status "Syncronizing $SOURCE to $TARGET ..."
 	# Note the extra slash at the end of source to avoid making subdirectory inside target
 	rsync -say --info=all0,misc2,name1,remove1,stats2 "$SOURCE/" "$TARGET"
+	# FIXME: handle the case where rsync fails above? Maybe use retry-loop with option to quit here, too?
 	status "Initial syncronization complete."
 }
 
@@ -160,7 +161,7 @@ sync_now()
 		do
 			rsync -sayr --info=all0,misc2,name1,remove1,stats1 --delete --delete-missing-args --no-implied-dirs --files-from="$SYNCLIST" "$SOURCE/" "$TARGET"
 			RSYNC_STATUS="$?"
-			
+
 			case "$RSYNC_STATUS" in
 				0|20|24)
 					# clear list of files to synchronize to make things easier to debug in case of crash
@@ -172,7 +173,7 @@ sync_now()
 					;;
 			esac
 		done
-		
+
 		if test -f "$WAITSTAMP"
 		then
 			status "$BASHPID: Sync complete but another sync request is waiting, restarting sync"
@@ -224,7 +225,7 @@ collectfiles_and_sync()
 			warning "Warning: ignoring inotifywait output: $SLASHES $OPERATION $FILENAME" 1>&2
 			continue;
 		fi
-		#echo "CHANGED: $FILENAME"	
+		#echo "CHANGED: $FILENAME"
 		echo "$FILENAME" >> "$WAITLIST"
 		sync_soon
 	done
